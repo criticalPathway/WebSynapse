@@ -1,0 +1,255 @@
+#!/usr/bin/env node
+import os from 'node:os';
+import process from 'node:process';
+import stdin from 'get-stdin';
+import groupArgs from 'group-args';
+import indentString from 'indent-string';
+import {escapeRegExp, isObject, isString, reduce} from 'lodash-es';
+import meow from 'meow';
+import pico from 'picocolors';
+import {validate} from './src/config.js';
+import {generate} from './index.js';
+
+const help = `
+Usage: critical <input> [<option>]
+
+Options:
+  -b, --base              Your base directory
+  -c, --css               Your CSS Files (optional)
+  -w, --width             Viewport width
+  -h, --height            Viewport height
+  -i, --inline            Generate the HTML with inlined critical-path CSS
+  -e, --extract           Extract inlined styles from referenced stylesheets
+
+  --inlineImages          Inline images
+  --dimensions            Pass dimensions e.g. 1300x900
+  --ignore                RegExp, @type or selector to ignore
+  --ignore-[OPTION]       Pass options to postcss-discard. See https://goo.gl/HGo5YV
+  --ignoreInlinedStyles   Ignore inlined stylesheets
+  --include               RegExp, @type or selector to include
+  --include-[OPTION]      Pass options to inline-critical. See https://goo.gl/w6SHJM
+  --assetPaths            Directories/Urls where the inliner should start looking for assets
+  --user                  RFC2617 basic authorization user
+  --pass                  RFC2617 basic authorization password
+  --penthouse-[OPTION]    Pass options to penthouse. See https://goo.gl/PQ5HLL
+  --ua, --userAgent       User agent to use when fetching remote src
+  --strict                Throw an error on css parsing errors or if no css is found
+`;
+
+const meowOpts = {
+  importMeta: import.meta,
+  flags: {
+    base: {
+      type: 'string',
+      shortFlag: 'b',
+    },
+    css: {
+      type: 'string',
+      shortFlag: 'c',
+      isMultiple: true,
+    },
+    width: {
+      shortFlag: 'w',
+    },
+    height: {
+      shortFlag: 'h',
+    },
+    inline: {
+      type: 'boolean',
+      shortFlag: 'i',
+    },
+    extract: {
+      type: 'boolean',
+      shortFlag: 'e',
+      default: false,
+    },
+    inlineImages: {
+      type: 'boolean',
+    },
+    ignoreInlinedStyles: {
+      type: 'boolean',
+      default: false,
+    },
+    ignore: {
+      type: 'string',
+    },
+    user: {
+      type: 'string',
+    },
+    strict: {
+      type: 'boolean',
+      default: false,
+    },
+    pass: {
+      type: 'string',
+    },
+    userAgent: {
+      type: 'string',
+      shortFlag: 'ua',
+    },
+    dimensions: {
+      type: 'string',
+      isMultiple: true,
+    },
+  },
+};
+
+const cli = meow(help, meowOpts);
+
+const groupKeys = ['ignore', 'inline', 'penthouse', 'target', 'request'];
+// Group args for inline-critical and penthouse
+const grouped = {
+  ...cli.flags,
+  ...groupArgs(
+    groupKeys,
+    {
+      delimiter: '-',
+    },
+    meowOpts
+  ),
+};
+
+/**
+ * Check if key is an alias
+ * @param {string} key Key to check
+ * @returns {boolean} True for alias
+ */
+const isAlias = (key) => {
+  if (isString(key) && key.length > 1) {
+    return false;
+  }
+
+  const aliases = Object.keys(meowOpts.flags)
+    .filter((k) => meowOpts.flags[k].shortFlag)
+    .map((k) => meowOpts.flags[k].shortFlag);
+
+  return aliases.includes(key);
+};
+
+/**
+ * Check if value is an empty object
+ * @param {mixed} val Value to check
+ * @returns {boolean} Whether or not this is an empty object
+ */
+const isEmptyObj = (val) => isObject(val) && Object.keys(val).length === 0;
+
+/**
+ * Check if value is transformed to {default: val}
+ * @param {mixed} val Value to check
+ * @returns {boolean} True if it's been converted to {default: value}
+ */
+const isGroupArgsDefault = (val) => isObject(val) && Object.keys(val).length === 1 && val.default;
+
+/**
+ * Return regex if value is a string like this: '/.../g'
+ * @param {mixed} val Value to process
+ * @returns {mixed} Mapped values
+ */
+const mapRegExpStr = (val) => {
+  if (isString(val)) {
+    const {groups} = val.match(/^\/(?<regex>[^/]+)(?:\/?(?<flags>[igmy]+))?\/$/) || {};
+    const {regex, flags} = groups || {};
+
+    return (groups && new RegExp(escapeRegExp(regex), flags)) || val;
+  }
+
+  if (Array.isArray(val)) {
+    return val.map((v) => mapRegExpStr(v));
+  }
+
+  return val;
+};
+
+const normalizedFlags = reduce(
+  grouped,
+  (res, val, key) => {
+    // Cleanup groupArgs mess ;)
+    if (groupKeys.includes(key)) {
+      // An empty object means param without value, just true
+      if (isEmptyObj(val)) {
+        val = true;
+      } else if (isGroupArgsDefault(val)) {
+        val = val.default;
+      }
+    }
+
+    // Cleanup camelized group keys
+    if (groupKeys.some((k) => key.includes(k)) && !validate(key, val)) {
+      return res;
+    }
+
+    if (!isAlias(key)) {
+      res[key] = mapRegExpStr(val);
+    }
+
+    return res;
+  },
+  {}
+);
+
+function showError(err) {
+  process.stderr.write(indentString(pico.red('Error: ') + err.message || err, 3));
+  process.stderr.write(os.EOL);
+  process.stderr.write(indentString(help, 3));
+  process.exit(1);
+}
+
+function run(data) {
+  const {_: inputs = [], css, ...opts} = {...normalizedFlags};
+
+  // Detect css globbing
+  const cssBegin = process.argv.findIndex((el) => ['--css', '-c'].includes(el));
+  const cssEnd = process.argv.findIndex((el, index) => index > cssBegin && el.startsWith('-'));
+  const cssCheck = cssBegin >= 0 ? process.argv.slice(cssBegin, cssEnd > 0 ? cssEnd : undefined) : [];
+  const additionalCss = inputs.filter((file) => cssCheck.includes(file));
+  // Just take the first html input as we don't support multiple html sources for
+  const [input] = inputs.filter((file) => !additionalCss.includes(file)); // eslint-disable-line unicorn/prefer-array-find
+
+  if (Array.isArray(opts.dimensions)) {
+    opts.dimensions = opts.dimensions.reduce(
+      (result, data) => [
+        ...result,
+        ...data.split(',').map((dimension) => {
+          const [width, height] = dimension.split('x');
+          return {width: Number.parseInt(width, 10), height: Number.parseInt(height, 10)};
+        }),
+      ],
+      []
+    );
+  }
+
+  if (Array.isArray(css)) {
+    opts.css = [...css, ...additionalCss].filter(Boolean);
+  } else if (css || additionalCss.length > 0) {
+    opts.css = [css, ...additionalCss].filter(Boolean);
+  }
+
+  if (data) {
+    opts.html = data;
+  } else {
+    opts.src = input;
+  }
+
+  try {
+    generate(opts, (error, val) => {
+      if (error) {
+        showError(error);
+      } else if (opts.inline) {
+        process.stdout.write(val.html, process.exit);
+      } else if (opts.extract) {
+        process.stdout.write(val.uncritical, process.exit);
+      } else {
+        process.stdout.write(val.css, process.exit);
+      }
+    });
+  } catch (error) {
+    showError(error);
+  }
+}
+
+if (cli.input[0]) {
+  run();
+} else {
+  const data = await stdin();
+  run(data);
+}
