@@ -377,26 +377,4 @@ lifting automatically when you enable the [prioritize_critical_css](https://deve
 Critical has been used on a number of production sites that have found it stable for everyday use.
 That said, we welcome you to try it out on your project and report bugs if you find them.
 
-## Can I contribute?
 
-Of course. We appreciate all of our [contributors](https://github.com/addyosmani/critical/graphs/contributors) and
-welcome contributions to improve the project further. If you're uncertain whether an addition should be made, feel
-free to open up an issue and we can discuss it.
-
-## Maintainers
-
-This module is brought to you and maintained by the following people:
-
-- Addy Osmani - Creator ([Github](https://github.com/addyosmani) / [Twitter](https://twitter.com/addyosmani))
-- Ben Zörb - Primary maintainer ([Github](https://github.com/bezoerb) / [Twitter](https://twitter.com/bezoerb))
-
-## License
-
-[Apache-2.0 © Addy Osmani, Ben Zörb](license)
-
-[npm-url]: https://www.npmjs.com/package/critical
-[npm-image]: https://img.shields.io/npm/v/critical.svg
-[ci-url]: https://github.com/addyosmani/critical/actions?workflow=Tests
-[ci-image]: https://github.com/addyosmani/critical/workflows/Tests/badge.svg
-[coveralls-url]: https://coveralls.io/github/addyosmani/critical?branch=master
-[coveralls-image]: https://img.shields.io/coveralls/github/addyosmani/critical/master.svg
